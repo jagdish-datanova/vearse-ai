@@ -1,0 +1,16 @@
+{
+    "id": "a0",
+    "dialogue": "The five friends gather at the train station, buzzing with excitement for their trip to Goa. Siddharth grins, 'This is going to be epic, guys!'",
+    "options": [
+        {
+            "condition": "Agree",
+            "dialogue": "Vimal nods, 'Absolutely! I've been waiting for this since forever.'",
+            "target": "41"
+        },
+        {
+            "condition": "Joke",
+            "dialogue": "Dev chuckles, 'Just don't let Krunal drink all our money away!'",
+            "target": "42"
+        }
+    ]
+}
