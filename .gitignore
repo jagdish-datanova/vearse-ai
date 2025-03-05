@@ -3,3 +3,4 @@ db/
 .env
 uploads/
 test.py
+vearse-server.pem
