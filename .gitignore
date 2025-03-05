@@ -1,3 +1,4 @@
-/vearse-env/
+vearse-env/
 db/
 .env
+uploads/

@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
-from flask_pymongo import PyMongo
+# from flask_pymongo import PyMongo
+from pymongo import MongoClient
 from openai import OpenAI
 import json
 import os
@@ -12,9 +13,15 @@ load_dotenv()
 app = Flask(__name__)
 
 # MongoDB Configuration
-# app.config["MONGO_URI"] = "mongodb://localhost:27017/dialogue_memory"
-app.config["MONGO_URI"] = os.getenv('DATABASE_URL')
-mongo = PyMongo(app)
+database_url = os.getenv('DATABASE_URL')
+mongo_client = MongoClient(database_url)
+
+# Create (or get) the database
+db = mongo_client["dialogue_memory"]
+
+# Ensure the conversations collection exists
+if "conversations" not in db.list_collection_names():
+    db.create_collection("conversations")
 
 # File Upload Directory
 UPLOAD_FOLDER = 'uploads'
@@ -161,10 +168,19 @@ def extract_json(text):
 
     return result
 
+# Function to get or create a conversation for a user
+def get_or_create_conversation(user_id):
+    conversation = db.conversations.find_one({"user_id": user_id})
+    if not conversation:
+        db.conversations.insert_one({"user_id": user_id, "history": [], "file_paths": []})
+        conversation = db.conversations.find_one({"user_id": user_id})
+    return conversation
+
 def get_summary_from_openai(user_id, query, context=None):
     """Generate a response using OpenAI and maintain MongoDB-based session memory"""
     try:
-      conversation = mongo.db.conversations.find_one({"user_id": user_id})
+      
+      conversation = get_or_create_conversation(user_id)
       
       chat_history = conversation["history"] if conversation and "history" in conversation else []
       
@@ -206,16 +222,11 @@ def get_summary_from_openai(user_id, query, context=None):
           {"role": "assistant", "content": extracted_json}
       ]
       
-      if conversation:
-          mongo.db.conversations.update_one(
-              {"user_id": user_id},
-              {"$push": {"history": {"$each": new_entry}}}
+      db.conversations.update_one(
+          {"user_id": user_id},
+          {"$push": {"history": {"$each": new_entry}}}
           )
-      else:
-          mongo.db.conversations.insert_one(
-              {"user_id": user_id, "history": new_entry, "file_paths": file_paths }
-          )
-      
+
       return extracted_json if extracted_json else {"error": "No valid JSON found in response"}
     except Exception as e:
         return f"Error generating dialogue: {str(e)}"
@@ -243,9 +254,7 @@ def generate_dialogue():
       for file in files:
         if file and file.filename.endswith('.json'):
             filename = secure_filename(file.filename)
-            print(f"file name: {filename}")
             file_path = os.path.join(user_folder, filename)
-            print(f"file path: {file_path}")
             file.save(file_path)
             with open(file_path, 'r', encoding='utf-8') as f:
                 json_data = json.load(f)
@@ -256,14 +265,14 @@ def generate_dialogue():
       
       # Update MongoDB with the list of file paths
       if file_paths:
-        mongo.db.conversations.update_one(
+        db.conversations.update_one(
           {"user_id": user_id},
           {"$push": {"file_paths": {"$each": file_paths}}},
           upsert = True
         )
       
       response = get_summary_from_openai(user_id, query, context)
-      return response
+      return jsonify({"response": response})
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
@@ -276,7 +285,7 @@ def clear_session():
           return jsonify({"error": "Missing user_id"}), 400
 
       user_id = data['user_id']
-      conversation = mongo.db.conversations.find_one({"user_id": user_id})
+      conversation = db.conversations.find_one({"user_id": user_id})
       
       if conversation and "file_paths" in conversation:
         for file_path in conversation["file_paths"]:
@@ -289,7 +298,7 @@ def clear_session():
         os.rmdir(user_folder)
         
       # Delete MongoDB entry
-      mongo.db.conversations.delete_one({"user_id": user_id})
+      db.conversations.delete_one({"user_id": user_id})
 
       return jsonify({"message": "Session cleared successfully"})
     except Exception as e:
