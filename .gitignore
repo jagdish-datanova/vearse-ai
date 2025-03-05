@@ -2,3 +2,4 @@ vearse-env/
 db/
 .env
 uploads/
+test.py

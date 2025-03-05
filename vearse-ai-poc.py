@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-# from flask_pymongo import PyMongo
+from flask_cors import CORS
 from pymongo import MongoClient
 from openai import OpenAI
 import json
@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)
 
 # MongoDB Configuration
 database_url = os.getenv('DATABASE_URL')
