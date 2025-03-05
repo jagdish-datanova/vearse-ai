@@ -1,22 +1,17 @@
-# Use Python 3.12 as the base image
-FROM python:3.12-slim
-
-# Set the working directory inside the container
+# Use an official Python runtime as a parent image
+FROM python:3.9-slim
+# Set the working directory in the container
 WORKDIR /app
-
-# Copy the application files to the container
-COPY . /app
-
-# Install dependencies
+# Copy requirements.txt first to leverage Docker cache
+COPY requirements.txt /app/
+# Install the Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Expose port 5001
+# Copy the rest of the application code to the container
+COPY . /app/
+# Expose the port your Flask app runs on (default is 5001 in your code)
 EXPOSE 5001
-
-# Set environment variables
-ENV FLASK_APP=app.py
-ENV FLASK_RUN_HOST=0.0.0.0
-ENV FLASK_RUN_PORT=5001
-
-# Run the Flask application
-CMD ["flask", "run"]
+# Set environment variables if needed
+# ENV DATABASE_URL="your_database_url"
+# ENV OPENAI_API_KEY="your_openai_api_key"
+# Run the application
+CMD ["python", "vearse-ai-poc.py"]
