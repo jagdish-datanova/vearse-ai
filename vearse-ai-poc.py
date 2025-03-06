@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from pymongo import MongoClient
-from openai import OpenAI
+from motor.motor_asyncio import AsyncIOMotorClient
+import openai
 import json
 import os
 from werkzeug.utils import secure_filename
@@ -15,7 +15,7 @@ CORS(app)
 
 # MongoDB Configuration
 database_url = os.getenv('DATABASE_URL')
-mongo_client = MongoClient(database_url)
+mongo_client = AsyncIOMotorClient(database_url)
 
 # Create (or get) the database
 db = mongo_client["dialogue_memory"]
@@ -31,7 +31,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # OpenAI API Key
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # OpenAI Prompt Template
 prompt_template = '''
@@ -170,18 +170,18 @@ def extract_json(text):
     return result
 
 # Function to get or create a conversation for a user
-def get_or_create_conversation(user_id):
-    conversation = db.conversations.find_one({"user_id": user_id})
+async def get_or_create_conversation(user_id):
+    conversation = await db.conversations.find_one({"user_id": user_id})
     if not conversation:
-        db.conversations.insert_one({"user_id": user_id, "history": [], "file_paths": []})
-        conversation = db.conversations.find_one({"user_id": user_id})
+        await db.conversations.insert_one({"user_id": user_id, "history": [], "file_paths": []})
+        conversation = await db.conversations.find_one({"user_id": user_id})
     return conversation
 
-def get_summary_from_openai(user_id, query, context=None):
+async def get_summary_from_openai(user_id, query, context=None):
     """Generate a response using OpenAI and maintain MongoDB-based session memory"""
     try:
       
-      conversation = get_or_create_conversation(user_id)
+      conversation =await get_or_create_conversation(user_id)
       
       chat_history = conversation["history"] if conversation and "history" in conversation else []
       
@@ -209,7 +209,7 @@ def get_summary_from_openai(user_id, query, context=None):
       
       messages = [{"role": "system", "content": formatted_prompt}]
       
-      response = client.chat.completions.create(
+      response = await client.chat.completions.create(
           model="gpt-4o", temperature=0.3, messages=messages
       )
       result = response.choices[0].message.content
@@ -223,7 +223,7 @@ def get_summary_from_openai(user_id, query, context=None):
           {"role": "assistant", "content": extracted_json}
       ]
       
-      db.conversations.update_one(
+      await db.conversations.update_one(
           {"user_id": user_id},
           {"$push": {"history": {"$each": new_entry}}}
           )
@@ -232,13 +232,12 @@ def get_summary_from_openai(user_id, query, context=None):
     except Exception as e:
         return f"Error generating dialogue: {str(e)}"
 
-
 @app.route('/generate-dialogue', methods=['POST'])
-def generate_dialogue():
+async def generate_dialogue():
     """Generate dialogue from user query with optional file as context"""
     try:
-      user_id = request.form.get('user_id') or request.json.get('user_id')
-      query = request.form.get('input_data') or request.json.get('input_data')
+      user_id = request.form.get('user_id') or (await request.json).get('user_id')
+      query = request.form.get('input_data') or (await request.json).get('input_data')
       files = request.files.getlist('file')
       context = []
 
@@ -248,8 +247,9 @@ def generate_dialogue():
       if not query:
           return jsonify({"error": "Query is required. "}), 400
       
-      user_folder =os.path.join(app.config["UPLOAD_FOLDER"], user_id)
-      os.makedirs(user_folder, exist_ok=True)
+      if files:
+        user_folder =os.path.join(app.config["UPLOAD_FOLDER"], user_id)
+        os.makedirs(user_folder, exist_ok=True)
       
       file_paths = []
       for file in files:
@@ -266,27 +266,27 @@ def generate_dialogue():
       
       # Update MongoDB with the list of file paths
       if file_paths:
-        db.conversations.update_one(
+        await db.conversations.update_one(
           {"user_id": user_id},
           {"$push": {"file_paths": {"$each": file_paths}}},
           upsert = True
         )
       
-      response = get_summary_from_openai(user_id, query, context)
+      response = await get_summary_from_openai(user_id, query, context)
       return jsonify({"response": response})
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 @app.route('/clear-session', methods=['POST'])
-def clear_session():
+async def clear_session():
     """Clear the conversation history for a user in MongoDB"""
     try:
-      data = request.json
+      data = await request.json
       if not data or 'user_id' not in data:
           return jsonify({"error": "Missing user_id"}), 400
 
       user_id = data['user_id']
-      conversation = db.conversations.find_one({"user_id": user_id})
+      conversation = await db.conversations.find_one({"user_id": user_id})
       
       if conversation and "file_paths" in conversation:
         for file_path in conversation["file_paths"]:
@@ -299,11 +299,24 @@ def clear_session():
         os.rmdir(user_folder)
         
       # Delete MongoDB entry
-      db.conversations.delete_one({"user_id": user_id})
+      await db.conversations.delete_one({"user_id": user_id})
 
       return jsonify({"message": "Session cleared successfully"})
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+      
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({"status": "healthy"}), 200
+
+# if __name__ == '__main__':
+#     app.run(host='0.0.0.0', port=5001, debug=True)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    import asyncio
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    
+    config = Config()
+    config.bind = ["0.0.0.0:5001"]
+    asyncio.run(serve(app, config))
