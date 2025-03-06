@@ -7,6 +7,7 @@ import os
 from werkzeug.utils import secure_filename
 import re
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
 
@@ -20,9 +21,10 @@ mongo_client = AsyncIOMotorClient(database_url)
 # Create (or get) the database
 db = mongo_client["dialogue_memory"]
 
-# Ensure the conversations collection exists
-if "conversations" not in db.list_collection_names():
-    db.create_collection("conversations")
+async def create_db_collection():
+    existing_collections = await db.list_collection_names()
+    if "conversations" not in existing_collections:
+        await db.create_collection("conversations")
 
 # File Upload Directory
 UPLOAD_FOLDER = 'uploads'
@@ -171,6 +173,9 @@ def extract_json(text):
 
 # Function to get or create a conversation for a user
 async def get_or_create_conversation(user_id):
+
+    # Create collection if not exist
+    await create_db_collection()
     conversation = await db.conversations.find_one({"user_id": user_id})
     if not conversation:
         await db.conversations.insert_one({"user_id": user_id, "history": [], "file_paths": []})
