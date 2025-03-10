@@ -35,19 +35,19 @@ async def create_db_collection():
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-class DialogueOption(BaseModel):
-    condition: Optional[str] = None
-    dialogue: str
-    target: str
+# class DialogueOption(BaseModel):
+#     condition: Optional[str] = None
+#     dialogue: str
+#     target: str
 
-class DialogueNode(BaseModel):
-    id: str
-    dialogue: str
-    options: List[DialogueOption] = Field(default_factory=list)  # Default empty list
-    reward: Optional[str] = None  # Optional field
+# class DialogueNode(BaseModel):
+#     id: str
+#     dialogue: str
+#     options: List[DialogueOption] = Field(default_factory=list)  # Default empty list
+#     reward: Optional[str] = None  # Optional field
 
-class DialogueResponse(BaseModel):
-    dialogues: List[DialogueNode] = Field(default_factory=list)  # Default empty list
+# class DialogueResponse(BaseModel):
+#     dialogues: List[DialogueNode] = Field(default_factory=list)  # Default empty list
 
 
 # AWS S3 Configuration
@@ -91,18 +91,8 @@ def generate_presigned_url(s3_key):
     except Exception:
         return None
 
-# - If the user input is a greeting (e.g., "hi", "hello", "welcome", "hey", "good morning"), respond with ->"How Vearse Dialogue Generator assists you today?"
-# OpenAI Prompt Template
-prompt_template = '''
-- You are an expert dialogue designer for interactive storytelling in video games. Your task is to generate custom dialogue using the provided query, chat history, previous files data and uploaded files.
-
-### Chat History: {chat_history}
-
-### previous files data: {previsous_file_data}
-
-### uploaded files data: {uploaded_file}
-
-### Query: {query}
+'''
+- If the user input is a greeting (e.g., "hi", "hello", "welcome", "hey", "good morning"), respond with ->"How Vearse Dialogue Generator assists you today?"
 
 JSON Input Template:
 {{
@@ -119,51 +109,21 @@ Instructions:
 - Include optional item_gain or loop conditions if applicable.
 - Dialogue must feel logical and reflective of player choices.
 - Output should be in JSON format without adding any extra tags and, symbols.
-
-example Output:
-  [{{
-    "id": "a0",
-    "dialogue": "The merchant waves at you. 'Come closer! I have an adventure to offer. Will you hear me out?'",
-    "options": [
-      {{
-        "condition": "Accept",
-        "dialogue": "'Splendid! Here's the quest.'",
-        "target": "41"
-      }},
-      {{
-        "condition": "Decline",
-        "dialogue": "'Suit yourself. The opportunity may not come again.'",
-        "target": "51"
-      }}
-    ]
-  }},
-  {{
-    "id": "41",
-    "dialogue": "'The golden amulet must be retrieved from the ancient ruins to the north. Will you take on the challenge?'",
-    "options": [
-      {{
-        "condition": "Agree to help",
-        "dialogue": "'You're a true hero. Good luck!'",
-        "target": "83"
-      }},
-      {{
-        "condition": "Change mind",
-        "dialogue": "'Perhaps you're not the adventurer I thought you were.'",
-        "target": "51"
-      }}
-    ]
-  }},
-  {{
-    "id": "83",
-    "dialogue": "You hand over the golden amulet. 'This will secure my fortune. You have my thanks!'",
-    "reward": "Golden Amulet"
-  }},
-  {{
-    "id": "51",
-    "dialogue": "The merchant walks away, disappointed. 'I hope you reconsider next time.'"
-  }}]
 '''
+# OpenAI Prompt Template
+prompt_template = '''
+- You are a gaming story design expert. I will give you a prompt generated for GameUI. This prompt has dialogue for a game in specific format. User will ask for a specific request like changing the tone or storyline of the JSON. Your job is to provide feedback and improvement points for the json dialogue file. Dont correct the JSON yourself, just provide points of improvement.
 
+### Chat History: {chat_history}
+
+### previous files data: {previsous_file_data}
+
+### uploaded files data: {uploaded_file}
+
+### Query: {query}
+
+'''
+# print(f"prompt template: {prompt_template}")
 # Function to get or create a conversation for a user
 async def get_or_create_conversation(user_id):
 
@@ -198,9 +158,13 @@ async def get_summary_from_openai(user_id, query, context=None):
       
       # Format chat history and context separately
       formatted_chat_history = json.dumps(chat_history, indent=2) if chat_history else "No previous chat history."
+      # print(f"chat history: {formatted_chat_history}")
       uploaded_file = json.dumps(context, indent=2) if context else "No additional context provided."
+      # print(f"uploaded files: {uploaded_file}")
       previsous_file_data = json.dumps(uploaded_file_data, indent=2) if uploaded_file_data else "No uploaded file data."
+      # print(f"previous files data: {previsous_file_data}")
 
+      
       # Prepare the final prompt with separated sections
       formatted_prompt = prompt_template.format(
           chat_history=formatted_chat_history,
@@ -208,14 +172,13 @@ async def get_summary_from_openai(user_id, query, context=None):
           previsous_file_data=previsous_file_data,
           query=query
       )
-      
+      # print(f"formatted prompt: {formatted_prompt}")
       messages = [{"role": "system", "content": formatted_prompt}]
       
       response = await client.beta.chat.completions.parse(
                                                 model="gpt-4o",
                                                 temperature=0.3,
-                                                messages=messages,
-                                                response_format=DialogueResponse)
+                                                messages=messages)
       result = response.choices[0].message.content
     #   print(f"Result: {result}")
       return result if result else {"error": "No valid JSON found in response"}
