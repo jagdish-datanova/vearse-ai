@@ -13,6 +13,7 @@ from botocore.exceptions import NoCredentialsError
 import requests
 from pydantic import BaseModel, Field
 from typing import List, Optional
+from datetime import datetime
 
 load_dotenv()
 
@@ -30,25 +31,33 @@ async def create_db_collection():
     existing_collections = await db.list_collection_names()
     if "conversations" not in existing_collections:
         await db.create_collection("conversations")
+        
+# Ensure indexes for faster queries
+async def setup_indexes():
+    await db.conversations.create_index([("user_id", 1), ("created_at", -1)])
+
+# Ensure schema validation for MongoDB
+async def setup_schema():
+    validation_schema = {
+        "bsonType": "object",
+        "required": ["user_id", "role", "content", "created_at"],
+        "properties": {
+            "user_id": {"bsonType": "string"},
+            "role": {"bsonType": "string", "enum": ["user", "assistant"]},
+            "content": {"bsonType": "string"},
+            "file_path": {"bsonType": "array", "items": {"bsonType": "string"}},
+            "created_at": {"bsonType": "string"}
+        }
+    }
+    await db.command("collMod", "conversations", validator={"$jsonSchema": validation_schema})
+
+async def initialize_db():
+    await setup_indexes()
+    await setup_schema()
 
 # OpenAI API Key
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-# class DialogueOption(BaseModel):
-#     condition: Optional[str] = None
-#     dialogue: str
-#     target: str
-
-# class DialogueNode(BaseModel):
-#     id: str
-#     dialogue: str
-#     options: List[DialogueOption] = Field(default_factory=list)  # Default empty list
-#     reward: Optional[str] = None  # Optional field
-
-# class DialogueResponse(BaseModel):
-#     dialogues: List[DialogueNode] = Field(default_factory=list)  # Default empty list
-
 
 # AWS S3 Configuration
 AWS_REGION = os.getenv("AWS_REGION")
@@ -91,25 +100,6 @@ def generate_presigned_url(s3_key):
     except Exception:
         return None
 
-'''
-- If the user input is a greeting (e.g., "hi", "hello", "welcome", "hey", "good morning"), respond with ->"How Vearse Dialogue Generator assists you today?"
-
-JSON Input Template:
-{{
-"Label": {{"type": "label", "id": "a0", "description": "First Interaction"}},
-"Condition": {{"type": "condition", "condition": "A", "target": "41"}},
-"Item Gain": {{"type": "item_gain", "item": "flippers"}},
-"End": {{"type": "end"}}
-}}
-
-Instructions:
-- Start with a label (e.g., $a0: First Interaction) and write compelling descriptions.
-- Use conditions to create branching paths. Each condition must target another label and provide immersive choices (e.g., “Yes | No” or “Help | Ignore”).
-- Ensure all branches lead to another label, an item gain, or an end state.
-- Include optional item_gain or loop conditions if applicable.
-- Dialogue must feel logical and reflective of player choices.
-- Output should be in JSON format without adding any extra tags and, symbols.
-'''
 # OpenAI Prompt Template
 prompt_template = '''
 - You are a gaming story design expert. I will give you a prompt generated for GameUI. This prompt has dialogue for a game in specific format. User will ask for a specific request like changing the tone or storyline of the JSON. Your job is to provide feedback and improvement points for the json dialogue file. Dont correct the JSON yourself, just provide points of improvement.
@@ -125,22 +115,39 @@ prompt_template = '''
 '''
 # print(f"prompt template: {prompt_template}")
 # Function to get or create a conversation for a user
-async def get_or_create_conversation(user_id):
+async def get_user_conversations(user_id):
+    """Retrieve all conversation messages for a user, sorted by latest first."""
+    conversations = await db.conversations.find({"user_id": user_id}).sort("created_at", -1).to_list(length=None)
 
-    # Create collection if not exist
-    await create_db_collection()
-    conversation = await db.conversations.find_one({"user_id": user_id})
-    if not conversation:
-        await db.conversations.insert_one({"user_id": user_id, "history": []})
-        conversation = await db.conversations.find_one({"user_id": user_id})
-    return conversation
+    for entry in conversations:
+        entry["_id"] = str(entry["_id"])  # Convert ObjectId to string
+        if "created_at" in entry and isinstance(entry["created_at"], datetime):
+            entry["created_at"] = entry["created_at"].isoformat()  # Convert datetime to ISO format string
+
+    return conversations
+  
+async def get_user_files_paginated(user_id, page=1, limit=10):
+    skip_count = (page - 1) * limit
+    cursor = db.conversations.find({"user_id": user_id}).sort("created_at", -1).skip(skip_count).limit(limit)
+    messages = await cursor.to_list(length=limit)
+    for entry in messages:
+        entry["_id"] = str(entry["_id"])
+        if "created_at" in entry and isinstance(entry["created_at"], datetime):
+            entry["created_at"] = entry["created_at"].isoformat()
+        if entry.get("file_path") and isinstance(entry["file_path"], list):
+            entry["file_path"] = [f"{AWS_URL}/{file}" for file in entry["file_path"]]
+    total_items = await db.conversations.count_documents({"user_id": user_id})
+    total_pages = (total_items + limit - 1) // limit
+    return {"history": messages, "page": page, "total_pages": total_pages, "total_items": total_items, "items_per_page": limit}
 
 async def get_summary_from_openai(user_id, query, context=None):
     """Generate a response using OpenAI and maintain MongoDB-based session memory"""
     try:
       
-      conversation =await get_or_create_conversation(user_id)
-      chat_history = conversation["history"] if conversation and "history" in conversation else []      
+      conversation =await get_user_conversations(user_id)
+      for entry in conversation:
+            entry["_id"] = str(entry["_id"])
+      chat_history = conversation if conversation else []
       uploaded_file_data = []
       # Extract file paths from history where file_path is not null
       file_keys = [entry["file_path"] for entry in chat_history if entry.get("file_path")]
@@ -175,7 +182,7 @@ async def get_summary_from_openai(user_id, query, context=None):
       # print(f"formatted prompt: {formatted_prompt}")
       messages = [{"role": "system", "content": formatted_prompt}]
       
-      response = await client.beta.chat.completions.parse(
+      response = await client.chat.completions.create(
                                                 model="gpt-4o",
                                                 temperature=0.3,
                                                 messages=messages)
@@ -189,11 +196,10 @@ async def get_summary_from_openai(user_id, query, context=None):
 async def generate_dialogue():
     """Generate dialogue from user query with optional file as context"""
     try:
-      user_id = request.form.get('user_id') or (await request.json).get('user_id')
-      query = request.form.get('input_data') or (await request.json).get('input_data')
+      user_id = request.form.get('user_id')
+      query = request.form.get('input_data')
       files = request.files.getlist('file')
       context = []
-      file_path = None
 
       if not user_id:
           return jsonify({"error": "Please Provide an user_id"}), 400
@@ -214,23 +220,22 @@ async def generate_dialogue():
 
       # Save user message with file_path (or null if no file)
       user_message = {
-          "role": "user",
-          "file_path": file_paths,  # Store file path if available, else null
-          "content": query
-      }
+            "user_id": user_id,
+            "role": "user",
+            "file_path": file_paths,
+            "content": query,
+            "created_at": datetime.utcnow().isoformat() 
+        }
+      await db.conversations.insert_one(user_message)
       
       response = await get_summary_from_openai(user_id, query, context)
       assistant_message = {
+            "user_id": user_id,
             "role": "assistant",
-            "content": response
+            "content": response,
+            "created_at": datetime.utcnow().isoformat()
         }
-
-      # Update MongoDB history
-      await db.conversations.update_one(
-          {"user_id": user_id},
-          {"$push": {"history": {"$each": [user_message, assistant_message]}}},
-          upsert=True
-      )
+      await db.conversations.insert_one(assistant_message)
 
       return jsonify({"response": response})
     except Exception as e:
@@ -238,50 +243,17 @@ async def generate_dialogue():
 
 @app.route('/get-user-files', methods=['POST'])
 async def get_user_files():
-    """Retrieve user's uploaded file URLs from MongoDB."""
     try:
-        data = request.get_json()
+        if not request.is_json:
+            return jsonify({"error": "Expected JSON data"}), 400
+        data = request.json
         user_id = data.get('user_id')
         page = int(data.get('page', 1))
-        items_per_page = 10
-
+        items_per_page = int(data.get('items_per_page', 10))
         if not user_id:
             return jsonify({"error": "Missing user_id"}), 400
-
-        conversation = await db.conversations.find_one({"user_id": user_id})
-        if not conversation or "history" not in conversation:
-            return jsonify({
-                "history": [],
-                "page": 1,
-                "total_pages": 0
-            })
-        chat_history = conversation.get("history", [])
-        total_items = len(chat_history)
-        total_pages = (total_items + items_per_page - 1) // items_per_page
-
-        # Calculate pagination indexes
-        start_idx = (page - 1) * items_per_page
-        end_idx = min(start_idx + items_per_page, total_items)
-
-        # Get paginated history
-        paginated_history = chat_history[start_idx:end_idx]
-
-        # Process file paths to generate proper URLs
-        for entry in paginated_history:
-            if entry.get("file_path") and isinstance(entry["file_path"], list):
-                entry["file_path"] = [f"{AWS_URL}/{file}" for file in entry["file_path"]]
-
-        # Include pagination info in the response
-        response_data = {
-            "history": paginated_history,
-            "page": page,
-            "total_pages": total_pages,
-            "total_items": total_items,
-            "items_per_page": items_per_page
-        }
-
-        return jsonify({"chat_history": response_data})
-
+        response = await get_user_files_paginated(user_id, page, items_per_page)
+        return jsonify(response)
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
@@ -319,6 +291,31 @@ async def close_mongo_connection():
         await mongo_client.close()
         print("MongoDB connection closed")
 
+# if __name__ == '__main__':
+#     import asyncio
+#     from hypercorn.asyncio import serve
+#     from hypercorn.config import Config
+#     from asgiref.wsgi import WsgiToAsgi
+
+#     config = Config()
+#     config.bind = ["0.0.0.0:5001"]
+#     config.use_reloader = False
+    
+#     # Add cleanup to Hypercorn's on_exit handler
+#     config.on_exit = [close_mongo_connection]
+
+#     try:
+#         # Wrap the Flask app and run the server
+#         asgi_app = WsgiToAsgi(app)
+#         asyncio.run(serve(asgi_app, config))
+#     except KeyboardInterrupt:
+#         print("\nServer stopped by user")
+#     finally:
+#         # Ensure cleanup even if unexpected errors occur
+#         loop = asyncio.get_event_loop()
+#         if loop.is_running():
+#             loop.create_task(close_mongo_connection())
+
 if __name__ == '__main__':
     import asyncio
     from hypercorn.asyncio import serve
@@ -329,17 +326,17 @@ if __name__ == '__main__':
     config.bind = ["0.0.0.0:5001"]
     config.use_reloader = False
     
-    # Add cleanup to Hypercorn's on_exit handler
-    config.on_exit = [close_mongo_connection]
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(initialize_db())
+
+    asgi_app = WsgiToAsgi(app)
 
     try:
-        # Wrap the Flask app and run the server
-        asgi_app = WsgiToAsgi(app)
-        asyncio.run(serve(asgi_app, config))
+        loop.run_until_complete(serve(asgi_app, config))
     except KeyboardInterrupt:
         print("\nServer stopped by user")
     finally:
-        # Ensure cleanup even if unexpected errors occur
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(close_mongo_connection())
+        if not loop.is_closed():
+            loop.run_until_complete(close_mongo_connection())
+            loop.close()
