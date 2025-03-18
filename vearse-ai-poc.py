@@ -101,18 +101,35 @@ def generate_presigned_url(s3_key):
         return None
 
 # OpenAI Prompt Template
-prompt_template = '''
-- You are a gaming story design expert. I will give you a prompt generated for GameUI. This prompt has dialogue for a game in specific format. User will ask for a specific request like changing the tone or storyline of the JSON. Your job is to provide feedback and improvement points for the json dialogue file. Dont correct the JSON yourself, just provide points of improvement.
+# prompt_template = '''
+# - You are a gaming story design expert. I will give you a prompt generated for GameUI. This prompt has dialogue for a game in specific format. User will ask for a specific request like changing the tone or storyline of the JSON. Your job is to provide feedback and improvement points for the json dialogue file. Dont correct the JSON yourself, just provide points of improvement.
+
+# ### Chat History: {chat_history}
+
+# ### previous files data: {previsous_file_data}
+
+# ### uploaded files data: {uploaded_file}
+
+# ### Query: {query}
+
+# '''
+
+prompt_template = """
+- You are a gaming story design expert specializing in structured dialogue generation. Based on user input, your task is to:
+  1. Generate structured game dialogues in a predefined JSON format when a story is provided.
+  2. Provide detailed feedback and improvement points for an uploaded JSON dialogue file if requested.
+  3. Modify specific parts of an uploaded JSON dialogue file based on user instructions while maintaining its structure.
 
 ### Chat History: {chat_history}
 
-### previous files data: {previsous_file_data}
+### Previous Files Data: {previous_file_data}
 
-### uploaded files data: {uploaded_file}
+### Uploaded Files Data: {uploaded_file}
 
-### Query: {query}
+### User Query: {query}
 
-'''
+Analyze the provided User query and determine the best course of action—whether to generate new dialogues, review and suggest improvements, or modify existing content. Ensure that your response follows a structured JSON format and aligns with the user's intent.
+"""
 # print(f"prompt template: {prompt_template}")
 # Function to get or create a conversation for a user
 async def get_user_conversations(user_id):
@@ -165,18 +182,18 @@ async def get_summary_from_openai(user_id, query, context=None):
       
       # Format chat history and context separately
       formatted_chat_history = json.dumps(chat_history, indent=2) if chat_history else "No previous chat history."
-      # print(f"chat history: {formatted_chat_history}")
+      print(f"chat history: {formatted_chat_history}")
       uploaded_file = json.dumps(context, indent=2) if context else "No additional context provided."
-      # print(f"uploaded files: {uploaded_file}")
-      previsous_file_data = json.dumps(uploaded_file_data, indent=2) if uploaded_file_data else "No uploaded file data."
-      # print(f"previous files data: {previsous_file_data}")
+      print(f"uploaded files: {uploaded_file}")
+      previous_file_data = json.dumps(uploaded_file_data, indent=2) if uploaded_file_data else "No uploaded file data."
+      print(f"previous files data: {previous_file_data}")
 
       
       # Prepare the final prompt with separated sections
       formatted_prompt = prompt_template.format(
           chat_history=formatted_chat_history,
           uploaded_file=uploaded_file,
-          previsous_file_data=previsous_file_data,
+          previous_file_data=previous_file_data,
           query=query
       )
       # print(f"formatted prompt: {formatted_prompt}")
