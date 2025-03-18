@@ -128,7 +128,77 @@ prompt_template = """
 
 ### User Query: {query}
 
-Analyze the provided User query and determine the best course of action—whether to generate new dialogues, review and suggest improvements, or modify existing content. Ensure that your response follows a structured JSON format and aligns with the user's intent.
+If the user query is a general greeting (e.g., "hi", "hello", "good morning"), respond with: "How can the Vearse Dialogue Generator assist you today?" instead of processing it further.
+Analyze the provided User query and determine the best course of action—whether to generate new dialogues, review and suggest improvements, or modify existing content. Ensure that your response aligns with the user's intent.
+
+### Guidelines:
+- Ensure logical flow and clear player choices.
+- Maintain consistency in dialogue structure.
+- Use conditions to create meaningful branching paths.
+- If feedback is required, provide structured improvement points separately, outside of the dialogue.
+- If modifications are needed, update the JSON while preserving its structure.
+- Response should be in JSON format without extra symbols or tags.
+
+### JSON Input Template for Dialogue Generation:
+{{
+  "Label": {{"type": "label", "id": "a0", "description": "First Interaction"}},
+  "Condition": {{"type": "condition", "condition": "A", "target": "41"}},
+  "Item Gain": {{"type": "item_gain", "item": "flippers"}},
+  "End": {{"type": "end"}}
+}}
+
+### Instructions for Dialogue Generation:
+- Start with a label (e.g., $a0: First Interaction) and write compelling descriptions.
+- Use conditions to create branching paths. Each condition must target another label and provide immersive choices (e.g., “Yes | No” or “Help | Ignore”).
+- Ensure all branches lead to another label, an item gain, or an end state.
+- Include optional item_gain or loop conditions if applicable.
+- Dialogue must feel logical and reflective of player choices.
+- Output should be in JSON format without adding any extra tags or symbols.
+
+### Example Output for Dialogue Generation:
+[
+  {{
+    "id": "a0",
+    "dialogue": "The merchant waves at you. 'Come closer! I have an adventure to offer. Will you hear me out?'",
+    "options": [
+      {{
+        "condition": "Accept",
+        "dialogue": "'Splendid! Here's the quest.'",
+        "target": "41"
+      }},
+      {{
+        "condition": "Decline",
+        "dialogue": "'Suit yourself. The opportunity may not come again.'",
+        "target": "51"
+      }}
+    ]
+  }},
+  {{
+    "id": "41",
+    "dialogue": "'The golden amulet must be retrieved from the ancient ruins to the north. Will you take on the challenge?'",
+    "options": [
+      {{
+        "condition": "Agree to help",
+        "dialogue": "'You're a true hero. Good luck!'",
+        "target": "83"
+      }},
+      {{
+        "condition": "Change mind",
+        "dialogue": "'Perhaps you're not the adventurer I thought you were.'",
+        "target": "51"
+      }}
+    ]
+  }},
+  {{
+    "id": "83",
+    "dialogue": "You hand over the golden amulet. 'This will secure my fortune. You have my thanks!'",
+    "reward": "Golden Amulet"
+  }},
+  {{
+    "id": "51",
+    "dialogue": "The merchant walks away, disappointed. 'I hope you reconsider next time.'"
+  }}
+]
 """
 # print(f"prompt template: {prompt_template}")
 # Function to get or create a conversation for a user
@@ -182,11 +252,11 @@ async def get_summary_from_openai(user_id, query, context=None):
       
       # Format chat history and context separately
       formatted_chat_history = json.dumps(chat_history, indent=2) if chat_history else "No previous chat history."
-      print(f"chat history: {formatted_chat_history}")
+    #   print(f"chat history: {formatted_chat_history}")
       uploaded_file = json.dumps(context, indent=2) if context else "No additional context provided."
-      print(f"uploaded files: {uploaded_file}")
+    #   print(f"uploaded files: {uploaded_file}")
       previous_file_data = json.dumps(uploaded_file_data, indent=2) if uploaded_file_data else "No uploaded file data."
-      print(f"previous files data: {previous_file_data}")
+    #   print(f"previous files data: {previous_file_data}")
 
       
       # Prepare the final prompt with separated sections
