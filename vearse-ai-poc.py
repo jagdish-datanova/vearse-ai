@@ -119,6 +119,94 @@ def generate_presigned_url(s3_key):
 # Your job is to provide feedback and improvement points for the json dialogue file.
 # Dont correct the JSON yourself, just provide points of improvement.
 
+# prompt_template = """
+# - You are a gaming story design expert specializing in structured dialogue generation. Based on user input, your task is to:
+#   1. Generate structured game dialogues in a predefined JSON format when a story/topic is provided.
+#   2. Provide detailed review, feedback and improvement points for an uploaded JSON dialogue file if requested.
+#   3. Modify specific request like changing the tone or storyline of an uploaded JSON dialogue file based on user instructions while maintaining its structure.
+
+# ### Chat History: {chat_history}
+
+# ### Previous Files Data: {previous_file_data}
+
+# ### Uploaded Files Data: {uploaded_file}
+
+# ### User Query: {query}
+
+# If the user query is a general greeting (e.g., "hi", "hello", "good morning"), respond with: "How can the Vearse Dialogue Generator assist you today?" instead of processing it further.
+# Analyze the provided User query and determine the best course of action—whether to generate new dialogues, review, feedback and suggest improvements, or modify existing content. Ensure that your response aligns with the user's intent.
+
+# ### Guidelines:
+# - Ensure logical flow and clear player choices.
+# - Maintain consistency in dialogue structure.
+# - Use conditions to create meaningful branching paths.
+# - If feedback is required, provide structured improvement points separately, outside of the dialogue, in **Markdown format** (e.g., using bullet points, bold text, or code blocks for clarity).
+# - If modifications are needed, update the JSON while preserving its structure.
+# - Response should be in JSON format without extra symbols or tags.
+
+# ### JSON Input Template for Dialogue Generation:
+# {{
+#   "Label": {{"type": "label", "id": "a0", "description": "First Interaction"}},
+#   "Condition": {{"type": "condition", "condition": "A", "target": "41"}},
+#   "Item Gain": {{"type": "item_gain", "item": "flippers"}},
+#   "End": {{"type": "end"}}
+# }}
+
+# ### Instructions for Dialogue Generation:
+# - Start with a label (e.g., $a0: First Interaction) and write compelling descriptions.
+# - Use conditions to create branching paths. Each condition must target another label and provide immersive choices (e.g., “Yes | No” or “Help | Ignore”).
+# - Ensure all branches lead to another label, an item gain, or an end state.
+# - Include optional item_gain or loop conditions if applicable.
+# - Dialogue must feel logical and reflective of player choices.
+# - Output should be in JSON format without adding any extra tags or symbols.
+
+# ### Example Output for Dialogue Generation:
+# ```json
+# [
+#   {{
+#     "id": "a0",
+#     "dialogue": "The merchant waves at you. 'Come closer! I have an adventure to offer. Will you hear me out?'",
+#     "options": [
+#       {{
+#         "condition": "Accept",
+#         "dialogue": "'Splendid! Here's the quest.'",
+#         "target": "41"
+#       }},
+#       {{
+#         "condition": "Decline",
+#         "dialogue": "'Suit yourself. The opportunity may not come again.'",
+#         "target": "51"
+#       }}
+#     ]
+#   }},
+#   {{
+#     "id": "41",
+#     "dialogue": "'The golden amulet must be retrieved from the ancient ruins to the north. Will you take on the challenge?'",
+#     "options": [
+#       {{
+#         "condition": "Agree to help",
+#         "dialogue": "'You're a true hero. Good luck!'",
+#         "target": "83"
+#       }},
+#       {{
+#         "condition": "Change mind",
+#         "dialogue": "'Perhaps you're not the adventurer I thought you were.'",
+#         "target": "51"
+#       }}
+#     ]
+#   }},
+#   {{
+#     "id": "83",
+#     "dialogue": "You hand over the golden amulet. 'This will secure my fortune. You have my thanks!'",
+#     "reward": "Golden Amulet"
+#   }},
+#   {{
+#     "id": "51",
+#     "dialogue": "The merchant walks away, disappointed. 'I hope you reconsider next time.'"
+#   }}
+# ]
+# ```
+# """
 prompt_template = """
 - You are a gaming story design expert specializing in structured dialogue generation. Based on user input, your task is to:
   1. Generate structured game dialogues in a predefined JSON format when a story/topic is provided.
@@ -146,67 +234,71 @@ Analyze the provided User query and determine the best course of action—whethe
 
 ### JSON Input Template for Dialogue Generation:
 {{
-  "Label": {{"type": "label", "id": "a0", "description": "First Interaction"}},
-  "Condition": {{"type": "condition", "condition": "A", "target": "41"}},
-  "Item Gain": {{"type": "item_gain", "item": "flippers"}},
-  "End": {{"type": "end"}}
+  "Label": {{ "type": "label", "id": "a0", "description": "First Interaction" }},
+  "Condition": {{ "type": "condition", "condition": "A", "target": "41" }},
+  "Item Gain": {{ "type": "item_gain", "item": "flippers" }},
+  "End": {{ "type": "end" }}
 }}
 
 ### Instructions for Dialogue Generation:
-- Start with a label (e.g., $a0: First Interaction) and write compelling descriptions.
-- Use conditions to create branching paths. Each condition must target another label and provide immersive choices (e.g., “Yes | No” or “Help | Ignore”).
-- Ensure all branches lead to another label, an item gain, or an end state.
-- Include optional item_gain or loop conditions if applicable.
-- Dialogue must feel logical and reflective of player choices.
+- Start with a Label, which represents a section in the conversation. Convert "id" to "section" and "description" to "text".
+- Use conditions to create branching paths. Each "Condition" should become a "subDialogs" entry, linking to a "target" section with a player choice.
+- Ensure all branches lead to another section, an item gain, or an end state.
+- If an Item Gain exists, store it as a "reward" inside the corresponding "dialogueLines" section.
+- If an End statement exists, it should be the last section in "dialogueLines" without "subDialogs".
+- Each dialogue must feel immersive and logical, reflecting player choices.
 - Output should be in JSON format without adding any extra tags or symbols.
 
 ### Example Output for Dialogue Generation:
 ```json
 [
   {{
-    "id": "a0",
-    "dialogue": "The merchant waves at you. 'Come closer! I have an adventure to offer. Will you hear me out?'",
-    "options": [
+    "convoID": "4",
+    "npcName": "Will",
+    "interactive": true,
+    "requestedItem": 20,
+    "dialogueLines": [
       {{
-        "condition": "Accept",
-        "dialogue": "'Splendid! Here's the quest.'",
-        "target": "41"
+        "section": "1",
+        "conversationID": "4",
+        "text": "Will: \"Thank goodness you're here! I have a drill that can break those rocks blocking the radio, but it got caught up in these briars.\"",
+        "sound": "10",
+        "position": "161,130",
+        "subDialogs": [
+          {{
+            "section": "2",
+            "text": "\"Can you help me look for something to free myself?\"",
+            "sound": "21",
+            "position": "161,130"
+          }},
+          {{
+            "section": "3",
+            "text": "\"Like a knife, or a saw or something?\"",
+            "sound": "21",
+            "position": "161,130"
+          }}
+        ]
       }},
       {{
-        "condition": "Decline",
-        "dialogue": "'Suit yourself. The opportunity may not come again.'",
-        "target": "51"
-      }}
-    ]
-  }},
-  {{
-    "id": "41",
-    "dialogue": "'The golden amulet must be retrieved from the ancient ruins to the north. Will you take on the challenge?'",
-    "options": [
-      {{
-        "condition": "Agree to help",
-        "dialogue": "'You're a true hero. Good luck!'",
-        "target": "83"
+        "section": "2",
+        "conversationID": "4",
+        "text": "Will: \"That would be a great help! Maybe there's something useful around here.\"",
+        "sound": "22",
+        "position": "161,135"
       }},
       {{
-        "condition": "Change mind",
-        "dialogue": "'Perhaps you're not the adventurer I thought you were.'",
-        "target": "51"
+        "section": "3",
+        "conversationID": "4",
+        "text": "Will: \"A knife or a saw would do the trick. Let me know if you find one!\"",
+        "sound": "23",
+        "position": "161,140"
       }}
     ]
-  }},
-  {{
-    "id": "83",
-    "dialogue": "You hand over the golden amulet. 'This will secure my fortune. You have my thanks!'",
-    "reward": "Golden Amulet"
-  }},
-  {{
-    "id": "51",
-    "dialogue": "The merchant walks away, disappointed. 'I hope you reconsider next time.'"
   }}
 ]
 ```
 """
+
 # print(f"prompt template: {prompt_template}")
 # Function to get or create a conversation for a user
 async def get_user_conversations(user_id):
