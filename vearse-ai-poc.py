@@ -9,7 +9,7 @@ import re
 from dotenv import load_dotenv
 import asyncio
 import boto3
-from botocore.exceptions import NoCredentialsError
+from botocore.exceptions import NoCredentialsError, BotoCoreError
 import requests
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -27,17 +27,14 @@ mongo_client = AsyncIOMotorClient(database_url)
 # Create (or get) the database
 db = mongo_client["dialogue_memory"]
 
-
-async def create_db_collection():
-    existing_collections = await db.list_collection_names()
-    if "conversations" not in existing_collections:
-        await db.create_collection("conversations")
-
-
-# Ensure indexes for faster queries
-async def setup_indexes():
-    await db.conversations.create_index([("user_id", 1), ("created_at", -1)])
-
+async def initialize_db():
+    try:
+        existing_collections = await db.list_collection_names()
+        if "conversations" not in existing_collections:
+            await db.create_collection("conversations")
+        await db.conversations.create_index([("user_id", 1), ("created_at", -1)])
+    except Exception as e:
+        print(f"Error initializing database: {e}")
 
 # Ensure schema validation for MongoDB
 async def setup_schema():
@@ -58,7 +55,6 @@ async def setup_schema():
 
 
 async def initialize_db():
-    await setup_indexes()
     await setup_schema()
 
 
@@ -75,163 +71,45 @@ AWS_URL = f"https://{AWS_BUCKET}.s3.{AWS_REGION}.amazonaws.com"
 AWS_PRESIGNED_URL_EXPIRES = int(os.getenv("AWS_PRESIGNED_URL_EXPIRES", 3600))
 
 # Initialize S3 Client
-s3_client = boto3.client(
-    "s3",
-    region_name=AWS_REGION,
-    aws_access_key_id=AWS_ACCESS_KEY,
-    aws_secret_access_key=AWS_SECRET_KEY,
-)
-
+try:
+    s3_client = boto3.client(
+        "s3",
+        region_name=AWS_REGION,
+        aws_access_key_id=AWS_ACCESS_KEY,
+        aws_secret_access_key=AWS_SECRET_KEY,
+    )
+except BotoCoreError as e:
+    print(f"Error initializing S3 client: {e}")
+    s3_client = None
 
 async def upload_file_to_s3(file, user_id):
-    """Uploads a file to S3 and returns the presigned URL"""
     try:
-        # Upload the file to S3
         filename = secure_filename(file.filename)
         s3_key = f"user_uploaded_files/{user_id}/{filename}"
-        s3_client.upload_fileobj(
-            file, AWS_BUCKET, s3_key, ExtraArgs={"ContentType": file.content_type}
-        )
-
+        s3_client.upload_fileobj(file, AWS_BUCKET, s3_key, ExtraArgs={"ContentType": file.content_type})
         return s3_key
-
     except NoCredentialsError:
+        return None
+    except Exception as e:
+        print(f"S3 Upload Error: {e}")
         return None
 
 
 def generate_presigned_url(s3_key):
-    """Generate a temporary pre-signed URL for accessing a private file."""
     try:
-        presigned_url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": AWS_BUCKET, "Key": s3_key},
-            ExpiresIn=AWS_PRESIGNED_URL_EXPIRES,
+        return s3_client.generate_presigned_url(
+            "get_object", Params={"Bucket": AWS_BUCKET, "Key": s3_key}, ExpiresIn=AWS_PRESIGNED_URL_EXPIRES
         )
-        return presigned_url
-    except Exception:
+    except Exception as e:
+        print(f"Presigned URL Error: {e}")
         return None
 
 
-# OpenAI Prompt Template
-# prompt_template = '''
-# - You are a gaming story design expert. I will give you a prompt generated for GameUI. This prompt has dialogue for a game in specific format. User will ask for a specific request like changing the tone or storyline of the JSON. Your job is to provide feedback and improvement points for the json dialogue file. Dont correct the JSON yourself, just provide points of improvement.
-
-# ### Chat History: {chat_history}
-
-# ### previous files data: {previsous_file_data}
-
-# ### uploaded files data: {uploaded_file}
-
-# ### Query: {query}
-
-# '''
-
-# You are a gaming story design expert. I will give you a prompt generated for GameUI.
-# This prompt has dialogue for a game in specific format. User will ask for a specific request like changing the tone or storyline of the JSON.
-# Your job is to provide feedback and improvement points for the json dialogue file.
-# Dont correct the JSON yourself, just provide points of improvement.
-
-# prompt_template = """
-# - You are a gaming story design expert specializing in structured dialogue generation. Based on user input, your task is to:
-#   1. Generate structured game dialogues in a predefined JSON format when a story/topic is provided.
-#   2. Provide detailed review, feedback and improvement points for an uploaded JSON dialogue file if requested.
-#   3. Modify specific request like changing the tone or storyline of an uploaded JSON dialogue file based on user instructions while maintaining its structure.
-
-# ### Chat History: {chat_history}
-
-# ### Previous Files Data: {previous_file_data}
-
-# ### Uploaded Files Data: {uploaded_file}
-
-# ### User Query: {query}
-
-# If the user query is a general greeting (e.g., "hi", "hello", "good morning"), respond with: "How can the Vearse Dialogue Generator assist you today?" instead of processing it further.
-# Analyze the provided User query and determine the best course of action—whether to generate new dialogues, review, feedback and suggest improvements, or modify existing content. Ensure that your response aligns with the user's intent.
-
-# ### Guidelines:
-# - Ensure logical flow and clear player choices.
-# - Maintain consistency in dialogue structure.
-# - Use conditions to create meaningful branching paths.
-# - If feedback is required, provide structured improvement points separately, outside of the dialogue, in **Markdown format** (e.g., using bullet points, bold text, or code blocks for clarity).
-# - If modifications are needed, update the JSON while preserving its structure.
-# - Response should be in JSON format without extra symbols or tags.
-
-# ### JSON Input Template for Dialogue Generation:
-# {{
-#   "Label": {{"type": "label", "id": "a0", "description": "First Interaction"}},
-#   "Condition": {{"type": "condition", "condition": "A", "target": "41"}},
-#   "Item Gain": {{"type": "item_gain", "item": "flippers"}},
-#   "End": {{"type": "end"}}
-# }}
-
-# ### Instructions for Dialogue Generation:
-# - Start with a label (e.g., $a0: First Interaction) and write compelling descriptions.
-# - Use conditions to create branching paths. Each condition must target another label and provide immersive choices (e.g., “Yes | No” or “Help | Ignore”).
-# - Ensure all branches lead to another label, an item gain, or an end state.
-# - Include optional item_gain or loop conditions if applicable.
-# - Dialogue must feel logical and reflective of player choices.
-# - Output should be in JSON format without adding any extra tags or symbols.
-
-# ### Example Output for Dialogue Generation:
-# ```json
-# [
-#   {{
-#     "id": "a0",
-#     "dialogue": "The merchant waves at you. 'Come closer! I have an adventure to offer. Will you hear me out?'",
-#     "options": [
-#       {{
-#         "condition": "Accept",
-#         "dialogue": "'Splendid! Here's the quest.'",
-#         "target": "41"
-#       }},
-#       {{
-#         "condition": "Decline",
-#         "dialogue": "'Suit yourself. The opportunity may not come again.'",
-#         "target": "51"
-#       }}
-#     ]
-#   }},
-#   {{
-#     "id": "41",
-#     "dialogue": "'The golden amulet must be retrieved from the ancient ruins to the north. Will you take on the challenge?'",
-#     "options": [
-#       {{
-#         "condition": "Agree to help",
-#         "dialogue": "'You're a true hero. Good luck!'",
-#         "target": "83"
-#       }},
-#       {{
-#         "condition": "Change mind",
-#         "dialogue": "'Perhaps you're not the adventurer I thought you were.'",
-#         "target": "51"
-#       }}
-#     ]
-#   }},
-#   {{
-#     "id": "83",
-#     "dialogue": "You hand over the golden amulet. 'This will secure my fortune. You have my thanks!'",
-#     "reward": "Golden Amulet"
-#   }},
-#   {{
-#     "id": "51",
-#     "dialogue": "The merchant walks away, disappointed. 'I hope you reconsider next time.'"
-#   }}
-# ]
-# ```
-# """
 prompt_template = """
 - You are a gaming story design expert specializing in structured dialogue generation. Based on user input, your task is to:
   1. Generate structured game dialogues in a predefined JSON format when a story/topic is provided.
   2. Provide detailed review, feedback and improvement points for an uploaded JSON dialogue file if requested.
   3. Modify specific request like changing the tone or storyline of an uploaded JSON dialogue file based on user instructions while maintaining its structure.
-
-### Chat History: {chat_history}
-
-### Previous Files Data: {previous_file_data}
-
-### Uploaded Files Data: {uploaded_file}
-
-### User Query: {query}
 
 If the user query is a general greeting (e.g., "hi", "hello", "good morning"), respond with: "How can the Vearse Dialogue Generator assist you today?" instead of processing it further.
 Analyze the provided User query and determine the best course of action—whether to generate new dialogues, review, feedback and suggest improvements, or modify existing content. Ensure that your response aligns with the user's intent.
@@ -311,8 +189,6 @@ Analyze the provided User query and determine the best course of action—whethe
 ```
 """
 
-
-# print(f"prompt template: {prompt_template}")
 # Function to get or create a conversation for a user
 async def get_user_conversations(user_id):
     """Retrieve all conversation messages for a user, sorted by latest first."""
@@ -325,10 +201,7 @@ async def get_user_conversations(user_id):
     for entry in conversations:
         entry["_id"] = str(entry["_id"])  # Convert ObjectId to string
         if "created_at" in entry and isinstance(entry["created_at"], datetime):
-            entry["created_at"] = entry[
-                "created_at"
-            ].isoformat()  # Convert datetime to ISO format string
-
+            entry["created_at"] = entry["created_at"].isoformat()  # Convert datetime to ISO format string
     return conversations
 
 
@@ -402,16 +275,29 @@ async def get_summary_from_openai(user_id, query, context=None):
             else "No uploaded file data."
         )
         #   print(f"previous files data: {previous_file_data}")
+        
+        # System Message
+        system_prompt = {
+            'role': "system",
+            'content': prompt_template
+        }
+        
+        # Prepare the user message
+        user_prompt = {
+            "role": "user",
+            "content": f"""
+                        ### Chat History: {formatted_chat_history}
 
-        # Prepare the final prompt with separated sections
-        formatted_prompt = prompt_template.format(
-            chat_history=formatted_chat_history,
-            uploaded_file=uploaded_file,
-            previous_file_data=previous_file_data,
-            query=query,
-        )
+                        ### Previous Files Data: {previous_file_data}
+
+                        ### Uploaded Files Data: {uploaded_file}
+
+                        ### User Query: {query}
+                        """
+                        }
         # print(f"formatted prompt: {formatted_prompt}")
-        messages = [{"role": "system", "content": formatted_prompt}]
+        messages = [system_prompt, user_prompt]
+        # print(f"user_messages: {user_prompt}")
 
         response = await client.chat.completions.create(
             model="gpt-4o", temperature=0.3, messages=messages
@@ -526,31 +412,6 @@ async def close_mongo_connection():
         await mongo_client.close()
         print("MongoDB connection closed")
 
-
-# if __name__ == '__main__':
-#     import asyncio
-#     from hypercorn.asyncio import serve
-#     from hypercorn.config import Config
-#     from asgiref.wsgi import WsgiToAsgi
-
-#     config = Config()
-#     config.bind = ["0.0.0.0:5001"]
-#     config.use_reloader = False
-
-#     # Add cleanup to Hypercorn's on_exit handler
-#     config.on_exit = [close_mongo_connection]
-
-#     try:
-#         # Wrap the Flask app and run the server
-#         asgi_app = WsgiToAsgi(app)
-#         asyncio.run(serve(asgi_app, config))
-#     except KeyboardInterrupt:
-#         print("\nServer stopped by user")
-#     finally:
-#         # Ensure cleanup even if unexpected errors occur
-#         loop = asyncio.get_event_loop()
-#         if loop.is_running():
-#             loop.create_task(close_mongo_connection())
 
 if __name__ == "__main__":
     import asyncio
