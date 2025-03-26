@@ -300,7 +300,7 @@ async def get_summary_from_openai(user_id, query, context=None):
         # print(f"user_messages: {user_prompt}")
 
         response = await client.chat.completions.create(
-            model="gpt-4o", temperature=0.3, messages=messages
+            model="gpt-4o", temperature=0.6, messages=messages
         )
         result = response.choices[0].message.content
         #   print(f"Result: {result}")
